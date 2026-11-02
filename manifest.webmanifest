@@ -1,0 +1,10 @@
+{
+  "name": "Panel — библиотека манхвы",
+  "short_name": "Panel",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#101014",
+  "theme_color": "#101014",
+  "orientation": "portrait",
+  "icons": []
+}
