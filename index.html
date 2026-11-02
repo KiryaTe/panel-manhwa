@@ -22,7 +22,7 @@ header{display:flex;align-items:center;justify-content:space-between;padding:22p
 </head>
 <body>
 <div class="app">
-<header><div><div class="brand">P<span>·</span>NEL</div><div class="sub">ТВОЯ ЛИЧНАЯ БИБЛИОТЕКА</div></div><div class="actions"><button class="btn" id="installBtn" hidden>Установить</button><button class="btn primary" id="addBtn">＋ Добавить</button></div></header>
+<header><div><div class="brand">P<span>·</span>NEL</div><div class="sub">ТВОЯ ЛИЧНАЯ БИБЛИОТЕКА</div></div><div class="actions"><button class="btn" id="installBtn" hidden>Установить</button><button class="btn" id="backupBtn">↓ Бэкап</button><button class="btn" id="restoreBtn">↑ Восстановить</button><input id="backupFile" type="file" accept=".panelbackup,.json,application/json" hidden><button class="btn primary" id="addBtn">＋ Добавить</button></div></header>
 <section class="hero"><h1>Твоя следующая глава начинается здесь.</h1><p>Манхва хранится на этом устройстве. Читай офлайн и продолжай с того же места.</p><button class="btn primary" id="heroAdd">Импортировать манхву</button></section>
 <div class="sectionhead"><h2>Моя библиотека</h2><span class="count" id="bookCount">0 тайтлов</span></div>
 <div class="toolbar"><input id="searchBooks" placeholder="Поиск по названию…"><select id="categoryFilter"><option value="">Все категории</option><option>Экшен</option><option>Романтика</option><option>Фэнтези</option><option>Драма</option><option>Комедия</option><option>Другое</option></select><select id="favoriteFilter"><option value="all">Все тайтлы</option><option value="fav">Избранное ★</option></select></div>
@@ -52,6 +52,56 @@ function allBooks(){return new Promise((res,rej)=>{let r=tx().getAll();r.onsucce
 function put(v){return new Promise((res,rej)=>{let r=tx('readwrite').put(v);r.onsuccess=()=>res();r.onerror=()=>rej(r.error)})}
 function del(id){return new Promise((res,rej)=>{let r=tx('readwrite').delete(id);r.onsuccess=()=>res();r.onerror=()=>rej(r.error)})}
 function sortName(a,b){return a.name.localeCompare(b.name,undefined,{numeric:true,sensitivity:'base'})}
+
+// Резервная копия: сохраняем все книги, обложки, страницы и прогресс чтения.
+function blobToDataURL(blob){return new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=()=>reject(r.error);r.readAsDataURL(blob)})}
+async function encodeBackupValue(value){
+ if(value instanceof Blob)return {$panelBlob:true,type:value.type||'application/octet-stream',data:await blobToDataURL(value)};
+ if(Array.isArray(value)){const out=[];for(const item of value)out.push(await encodeBackupValue(item));return out}
+ if(value&&typeof value==='object'){const out={};for(const [k,v] of Object.entries(value))out[k]=await encodeBackupValue(v);return out}
+ return value;
+}
+function dataURLToBlob(data,type){
+ const parts=data.split(','),meta=parts[0],raw=atob(parts[1]||''),mime=(meta.match(/data:([^;]+)/)||[])[1]||type;
+ const bytes=new Uint8Array(raw.length);for(let i=0;i<raw.length;i++)bytes[i]=raw.charCodeAt(i);return new Blob([bytes],{type:mime});
+}
+async function decodeBackupValue(value){
+ if(Array.isArray(value)){const out=[];for(const item of value)out.push(await decodeBackupValue(item));return out}
+ if(value&&typeof value==='object'){
+  if(value.$panelBlob===true&&typeof value.data==='string')return dataURLToBlob(value.data,value.type);
+  const out={};for(const [k,v] of Object.entries(value))out[k]=await decodeBackupValue(v);return out;
+ }
+ return value;
+}
+$('backupBtn').onclick=async()=>{
+ const btn=$('backupBtn');btn.disabled=true;btn.textContent='Готовим…';
+ try{
+  const all=await allBooks(),payload={format:'PANEL_BACKUP',version:1,createdAt:new Date().toISOString(),books:[]};
+  for(let i=0;i<all.length;i++){btn.textContent='Копируем '+(i+1)+'/'+all.length;payload.books.push(await encodeBackupValue(all[i]))}
+  const blob=new Blob([JSON.stringify(payload)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');
+  a.href=url;a.download='Panel-backup-'+new Date().toISOString().slice(0,10)+'.panelbackup';document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);
+  toast('Резервная копия сохранена');
+ }catch(e){toast('Не удалось создать копию: '+(e.message||'ошибка'))}
+ finally{btn.disabled=false;btn.textContent='↓ Бэкап'}
+};
+$('restoreBtn').onclick=()=>$('backupFile').click();
+$('backupFile').onchange=async()=>{
+ const file=$('backupFile').files[0];if(!file)return;
+ try{
+  const payload=JSON.parse(await file.text());
+  if(payload.format!=='PANEL_BACKUP'||payload.version!==1||!Array.isArray(payload.books))throw Error('Это не резервная копия Panel');
+  if(!confirm('Восстановить '+payload.books.length+' тайтлов? Совпадающие записи будут обновлены, остальные останутся.'))return;
+  let restored=0;
+  for(const raw of payload.books){
+   const book=await decodeBackupValue(raw);
+   if(!book||!book.id||!Array.isArray(book.chapters))continue;
+   await put(book);restored++;
+  }
+  await refresh();toast('Восстановлено тайтлов: '+restored);
+ }catch(e){toast('Ошибка восстановления: '+(e.message||'неверный файл'))}
+ finally{$('backupFile').value=''}
+};
+
 function render(){
  $('bookCount').textContent=books.length+' тайтлов';const root=$('library');root.innerHTML='';
  const q=($('searchBooks')?.value||'').trim().toLocaleLowerCase(),cat=$('categoryFilter')?.value||'',fav=$('favoriteFilter')?.value||'all';
